@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>飛行機からの投下運動シミュレーター</title>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f2f5;
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+        }
+
+        /* キャンバスのスタイル */
+        #canvas-container {
+            position: relative;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+            background-color: #e0f7fa; /* 空の色 */
+        }
+        canvas {
+            display: block;
+            background-color: transparent;
+        }
+
+        /* 操作パネルのスタイル */
+        .controls {
+            margin-top: 15px;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            width: 800px;
+            max-width: 95vw;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        label {
+            font-size: 0.9rem;
+            font-weight: bold;
+        }
+
+        input[type="range"] {
+            width: 100%;
+        }
+
+        .value-display {
+            font-size: 0.85rem;
+            color: #666;
+            float: right;
+        }
+
+        .buttons {
+            grid-column: 1 / -1;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            align-items: center;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-weight: bold;
+        }
+
+        button.primary { background-color: #2196F3; color: white; }
+        button.primary:hover { background-color: #1976D2; }
+        
+        button.secondary { background-color: #757575; color: white; }
+        button.secondary:hover { background-color: #616161; }
+
+        button.danger { background-color: #f44336; color: white; }
+        button.danger:hover { background-color: #d32f2f; }
+
+        .toggle-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.9rem;
+        }
+
+        /* 視点切り替えスイッチ */
+        .view-switch {
+            display: flex;
+            background: #eee;
+            border-radius: 20px;
+            padding: 3px;
+            cursor: pointer;
+        }
+        .view-option {
+            padding: 5px 15px;
+            border-radius: 15px;
+            font-size: 0.8rem;
+        }
+        .view-option.active {
+            background: #2196F3;
+            color: white;
+            font-weight: bold;
+        }
+
+    </style>
+</head>
+<body>
+
+    <h1>飛行機からの投下運動シミュレーター</h1>
+
+    <div id="canvas-container">
+        <canvas id="simCanvas" width="800" height="500"></canvas>
+    </div>
+
+    <div class="controls">
+        <div class="control-group">
+            <label>初速度 (v₀) <span id="val-v0" class="value-display">50 m/s</span></label>
+            <input type="range" id="input-v0" min="0" max="100" step="5" value="50">
+        </div>
+
+        <div class="control-group">
+            <label>加速度 (a) <span id="val-acc" class="value-display">0 m/s²</span></label>
+            <input type="range" id="input-acc" min="0" max="10" step="0.5" value="0">
+        </div>
+
+        <div class="control-group">
+            <label>投下間隔 <span id="val-interval" class="value-display">1.0 秒</span></label>
+            <input type="range" id="input-interval" min="0.5" max="3.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="control-group">
+            <label>再生速度 <span id="val-speed" class="value-display">1.0x</span></label>
+            <input type="range" id="input-speed" min="0.1" max="2.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="buttons">
+            <button id="btn-start" class="primary">再生</button>
+            <button id="btn-reset" class="secondary">リセット</button>
+            
+            <div style="width: 20px;"></div> <div class="toggle-group">
+                <input type="checkbox" id="check-vectors" checked>
+                <label for="check-vectors">速度ベクトル</label>
+            </div>
+            <div class="toggle-group">
+                <input type="checkbox" id="check-connect">
+                <label for="check-connect">物体を結ぶ線</label>
+            </div>
+
+            <div style="width: 20px;"></div> <div class="view-switch" id="view-toggle">
+                <div class="view-option active" data-view="ground">地面視点</div>
+                <div class="view-option" data-view="plane">飛行機視点</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * 物理シミュレーターのメインロジック
+         */
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // 物理定数とスケール
+        const G = 9.8; // 重力加速度 m/s^2
+        const SCALE = 10; // 1メートル = 10ピクセル
+        const PLANE_Y = 100; // 飛行機の高さ(px)
+        const GROUND_Y = 450; // 地面の高さ(px)
+
+        // 状態管理変数
+        let state = {
+            running: false,
+            finished: false,
+            time: 0,
+            planeX: 50, // 飛行機の初期X座標
+            planeV: 50, // 現在の速度
+            planeA: 0,  // 加速度
+            dropInterval: 1.0, // 投下間隔
+            lastDropTime: 0,
+            objects: [], // 投下された物体のリスト
+            viewMode: 'ground', // 'ground' or 'plane'
+            simSpeed: 1.0,
+            showVectors: true,
+            connectLines: false,
+            initialV0: 50
+        };
+
+        // UI要素の取得
+        const ui = {
+            v0: document.getElementById('input-v0'),
+            acc: document.getElementById('input-acc'),
+            interval: document.getElementById('input-interval'),
+            speed: document.getElementById('input-speed'),
+            valV0: document.getElementById('val-v0'),
+            valAcc: document.getElementById('val-acc'),
+            valInterval: document.getElementById('val-interval'),
+            valSpeed: document.getElementById('val-speed'),
+            btnStart: document.getElementById('btn-start'),
+            btnReset: document.getElementById('btn-reset'),
+            checkVectors: document.getElementById('check-vectors'),
+            checkConnect: document.getElementById('check-connect'),
+            viewToggle: document.getElementById('view-toggle')
+        };
+
+        // --- 初期化とイベントリスナー ---
+
+        function init() {
+            resetSimulation();
+            requestAnimationFrame(loop);
+        }
+
+        function resetSimulation() {
+            state.running = false;
+            state.finished = false;
+            state.time = 0;
+            state.planeX = 50;
+            state.planeV = parseFloat(ui.v0.value);
+            state.initialV0 = state.planeV;
+            state.planeA = parseFloat(ui.acc.value);
+            state.dropInterval = parseFloat(ui.interval.value);
+            state.lastDropTime = -state.dropInterval; // 開始直後に落とすため調整
+            state.objects = [];
+            ui.btnStart.textContent = "再生";
+            ui.btnStart.disabled = false;
+            draw();
+        }
+
+        // イベントリスナーの設定
+        ui.btnStart.addEventListener('click', () => {
+            if (state.finished) resetSimulation();
+            state.running = !state.running;
+            ui.btnStart.textContent = state.running ? "一時停止" : "再生";
+        });
+
+        ui.btnReset.addEventListener('click', resetSimulation);
+
+        // スライダー入力の反映
+        ui.v0.addEventListener('input', (e) => {
+            ui.valV0.textContent = `${e.target.value} m/s`;
+            if (!state.running && state.time === 0) resetSimulation();
+        });
+        ui.acc.addEventListener('input', (e) => {
+            ui.valAcc.textContent = `${e.target.value} m/s²`;
+            state.planeA = parseFloat(e.target.value);
+        });
+        ui.interval.addEventListener('input', (e) => {
+            ui.valInterval.textContent = `${e.target.value} 秒`;
+            state.dropInterval = parseFloat(e.target.value);
+        });
+        ui.speed.addEventListener('input', (e) => {
+            ui.valSpeed.textContent = `${e.target.value}x`;
+            state.simSpeed = parseFloat(e.target.value);
+        });
+
+        // チェックボックス
+        ui.checkVectors.addEventListener('change', (e) => state.showVectors = e.target.checked);
+        ui.checkConnect.addEventListener('change', (e) => state.connectLines = e.target.checked);
+
+        // 視点切り替え
+        const viewOptions = document.querySelectorAll('.view-option');
+        viewOptions.forEach(opt => {
+            opt.addEventListener('click', () => {
+                viewOptions.forEach(o => o.classList.remove('active'));
+                opt.classList.add('active');
+                state.viewMode = opt.dataset.view;
+                draw(); // 即座に再描画
+            });
+        });
+
+        // --- メインループ ---
+
+        let lastFrameTime = performance.now();
+
+        function loop(timestamp) {
+            const dtReal = (timestamp - lastFrameTime) / 1000;
+            lastFrameTime = timestamp;
+
+            // タブ切り替えなどでdtが大きすぎる場合はスキップ
+            if (dtReal > 0.1) {
+                requestAnimationFrame(loop);
+                return;
+            }
+
+            if (state.running && !state.finished) {
+                update(dtReal * state.simSpeed);
+            }
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        // --- 物理更新ロジック ---
+
+        function update(dt) {
+            state.time += dt;
+
+            // 1. 飛行機の移動 (等加速度直線運動: x = x0 + v0t + 1/2at^2 だが、微小時間で更新)
+            // v = v + a*dt
+            // x = x + v*dt
+            state.planeV += state.planeA * dt;
+            state.planeX += state.planeV * SCALE * dt;
+
+            // 2. 物体の投下判定
+            if (state.time - state.lastDropTime >= state.dropInterval) {
+                dropObject();
+                state.lastDropTime = state.time;
+            }
+
+            // 3. 各物体の移動
+            state.objects.forEach(obj => {
+                if (obj.landed) return;
+
+                // 鉛直方向の速度更新 vy = vy + g*dt
+                obj.vy += G * dt;
+
+                // 位置更新
+                // 水平方向は慣性により投下時の飛行機の速度(vx)を維持
+                obj.x += obj.vx * SCALE * dt;
+                obj.y += obj.vy * SCALE * dt;
+
+                // 接地判定
+                if (obj.y >= GROUND_Y) {
+                    obj.y = GROUND_Y;
+                    obj.landed = true;
+                    obj.vy = 0; // 接地後は止まる
+                    obj.vx = 0; // 今回の仕様では水平方向も止まるとする
+                }
+            });
+
+            // 4. 終了判定 (画面端まで飛行機が行ったら)
+            // 飛行機視点の場合は無限に続くが、とりあえず一定距離で止めるか、無限にするか。
+            // ここでは「シミュレーション上の距離」で判定します。
+            // 地面視点モードで画面外に出たら停止とする
+            if (state.viewMode === 'ground' && state.planeX > canvas.width + 100) {
+                stopSimulation();
+            } else if (state.time > 30) { // 安全のため30秒で強制停止
+                stopSimulation();
+            }
+        }
+
+        function dropObject() {
+            state.objects.push({
+                x: state.planeX,
+                y: PLANE_Y,
+                vx: state.planeV, // 投下瞬間の飛行機の速度を持つ（慣性）
+                vy: 0,
+                landed: false,
+                color: '#FF5722'
+            });
+        }
+
+        function stopSimulation() {
+            state.running = false;
+            state.finished = true;
+            ui.btnStart.textContent = "終了 (リセットしてください)";
+            ui.btnStart.disabled = true;
+        }
+
+        // --- 描画ロジック ---
+
+        function draw() {
+            // 背景クリア
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // カメラ位置の計算
+            let cameraX = 0;
+            if (state.viewMode === 'plane') {
+                // 飛行機が常に画面中央(横幅の半分)に来るようにカメラをずらす
+                cameraX = state.planeX - canvas.width / 2;
+            }
+
+            drawGrid(cameraX);
+            drawGround(cameraX);
+            
+            // 接続線の描画（オプション）
+            if (state.connectLines) {
+                drawConnectionLines(cameraX);
+            }
+
+            // 物体の描画
+            state.objects.forEach(obj => {
+                drawObject(obj, cameraX);
+            });
+
+            // 飛行機の描画
+            drawPlane(cameraX);
+
+            // 情報表示
+            drawInfo();
+        }
+
+        function drawGrid(cameraX) {
+            ctx.strokeStyle = '#cfd8dc';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            
+            // グリッドの間隔 (10m = 100px)
+            const gridSize = 10 * SCALE; 
+            
+            // 縦線 (カメラ位置に合わせてスクロールさせる)
+            const startX = Math.floor(cameraX / gridSize) * gridSize;
+            for (let x = startX; x < cameraX + canvas.width; x += gridSize) {
+                let drawX = x - cameraX;
+                ctx.moveTo(drawX, 0);
+                ctx.lineTo(drawX, canvas.height);
+            }
+
+            // 横線
+            for (let y = 0; y < canvas.height; y += gridSize) {
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+            }
+            ctx.stroke();
+        }
+
+        function drawGround(cameraX) {
+            ctx.fillStyle = '#795548';
+            ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+            
+            // 地面の目印（動きをわかりやすくするため）
+            ctx.fillStyle = '#a1887f';
+            const markSize = 50 * SCALE;
+            const startX = Math.floor(cameraX / markSize) * markSize;
+            for (let x = startX; x < cameraX + canvas.width; x += markSize) {
+                if ((x / markSize) % 2 === 0) {
+                    ctx.fillRect(x - cameraX, GROUND_Y, markSize/2, 5);
+                }
+            }
+        }
+
+        function drawConnectionLines(cameraX) {
+            // まだ着地していない物体と飛行機、または物体同士を結ぶ
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.setLineDash([5, 5]); // 点線
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+
+            // 飛行機から最初の物体、そして次の物体へ
+            let currentX = state.planeX - cameraX;
+            let currentY = PLANE_Y;
+
+            ctx.moveTo(currentX, currentY);
+
+            // 物体は新しい順に追加されているので、逆順（古い順＝落下位置が遠い順）あるいは
+            // 今回は「等速なら縦に並ぶ」ことを示したいので、X座標が同じ（または近い）ものを意識するより
+            // 単純に配列順（時間順）に線を引くと軌跡になる。
+            // しかし、教育的には「飛行機の真下に物体がある」ことを示したい。
+            // なので、飛行機の現在のX座標から、各物体の現在位置へ垂線を下ろすようなイメージが良いか、
+            // あるいは全物体をつなぐか。
+            
+            // 要件：「各物体の間を線で繋ぐ」
+            // すべての物体を描画順（投下された順）に繋ぎます
+            for (let i = state.objects.length - 1; i >= 0; i--) {
+                const obj = state.objects[i];
+                const drawX = obj.x - cameraX;
+                const drawY = obj.y;
+                ctx.lineTo(drawX, drawY);
+            }
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        function drawObject(obj, cameraX) {
+            const drawX = obj.x - cameraX;
+            const drawY = obj.y;
+
+            // 物体本体
+            ctx.fillStyle = obj.color;
+            ctx.beginPath();
+            ctx.arc(drawX, drawY, 8, 0, Math.PI * 2);
+            ctx.fill();
+
+            // ベクトル描画
+            if (state.showVectors && !obj.landed) {
+                drawVector(drawX, drawY, obj.vx, 0, '#2979ff'); // 水平成分 (青)
+                drawVector(drawX, drawY, 0, obj.vy, '#f44336'); // 鉛直成分 (赤)
+            }
+        }
+
+        function drawVector(x, y, vx, vy, color) {
+            const vScale = 0.5; // ベクトルの長さを調整
+            const endX = x + vx * vScale;
+            const endY = y + vy * vScale;
+            const headLen = 5;
+
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(endX, endY);
+            ctx.stroke();
+
+            // 矢印の頭
+            const angle = Math.atan2(endY - y, endX - x);
+            ctx.beginPath();
+            ctx.moveTo(endX, endY);
+            ctx.lineTo(endX - headLen * Math.cos(angle - Math.PI / 6), endY - headLen * Math.sin(angle - Math.PI / 6));
+            ctx.lineTo(endX - headLen * Math.cos(angle + Math.PI / 6), endY - headLen * Math.sin(angle + Math.PI / 6));
+            ctx.fillStyle = color;
+            ctx.fill();
+        }
+
+        function drawPlane(cameraX) {
+            const drawX = state.planeX - cameraX;
+            const drawY = PLANE_Y;
+
+            // 簡易的な飛行機の絵
+            ctx.fillStyle = '#555';
+            ctx.beginPath();
+            // 胴体
+            ctx.ellipse(drawX, drawY, 30, 10, 0, 0, Math.PI * 2);
+            ctx.fill();
+            // 翼
+            ctx.fillStyle = '#333';
+            ctx.beginPath();
+            ctx.moveTo(drawX - 10, drawY);
+            ctx.lineTo(drawX - 20, drawY + 15);
+            ctx.lineTo(drawX + 10, drawY + 15);
+            ctx.lineTo(drawX + 10, drawY);
+            ctx.fill();
+            // 尾翼
+            ctx.beginPath();
+            ctx.moveTo(drawX - 30, drawY);
+            ctx.lineTo(drawX - 40, drawY - 15);
+            ctx.lineTo(drawX - 25, drawY);
+            ctx.fill();
+        }
+
+        function drawInfo() {
+            ctx.fillStyle = 'black';
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillText(`時間: ${state.time.toFixed(2)} s`, 10, 20);
+            ctx.fillText(`飛行機速度: ${state.planeV.toFixed(1)} m/s`, 10, 40);
+        }
+
+        // 開始
+        init();
+
+    </script>
+</body>
+</html>
