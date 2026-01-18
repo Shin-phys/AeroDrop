@@ -104,6 +104,13 @@
             gap: 10px;
             font-size: 0.9rem;
         }
+        
+          .select-control {
+            padding: 6px 8px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+            font-size: 0.9rem;
+        }
 
         /* 視点切り替えスイッチ */
         .view-switch {
@@ -159,16 +166,34 @@
             <button id="btn-start" class="primary">再生</button>
             <button id="btn-reset" class="secondary">リセット</button>
             
-            <div style="width: 20px;"></div> <div class="toggle-group">
-                <input type="checkbox" id="check-vectors" checked>
-                <label for="check-vectors">速度ベクトル</label>
+            <div style="width: 20px;"></div>
+            <div class="toggle-group">
+                <label for="select-vectors">速度ベクトル</label>
+                <select id="select-vectors" class="select-control">
+                    <option value="both" selected>両方</option>
+                    <option value="vx">Vx（水平）のみ</option>
+                    <option value="vy">Vy（鉛直）のみ</option>
+                    <option value="none">なし</option>
+                </select>
             </div>
             <div class="toggle-group">
                 <input type="checkbox" id="check-connect">
-                <label for="check-connect">物体を結ぶ線</label>
+                <label for="check-connect">物体同士を結ぶ線</label>
+            </div>
+            <div class="toggle-group">
+                <input type="checkbox" id="check-trails" checked>
+                <label for="check-trails">軌跡（足跡）</label>
             </div>
 
-            <div style="width: 20px;"></div> <div class="view-switch" id="view-toggle">
+           <div style="width: 20px;"></div>
+            <div class="toggle-group">
+                <label for="select-trail-frame">軌跡視点</label>
+                <select id="select-trail-frame" class="select-control">
+                    <option value="ground" selected>地面基準</option>
+                    <option value="plane">飛行機視点</option>
+                </select>
+            </div>
+            <div class="view-switch" id="view-toggle">
                 <div class="view-option active" data-view="ground">地面視点</div>
                 <div class="view-option" data-view="plane">飛行機視点</div>
             </div>
@@ -201,8 +226,10 @@
             objects: [], // 投下された物体のリスト
             viewMode: 'ground', // 'ground' or 'plane'
             simSpeed: 1.0,
-            showVectors: true,
+            vectorMode: 'both',
             connectLines: false,
+            showTrails: true,
+            trailFrame: 'ground',
             initialV0: 50
         };
 
@@ -218,8 +245,10 @@
             valSpeed: document.getElementById('val-speed'),
             btnStart: document.getElementById('btn-start'),
             btnReset: document.getElementById('btn-reset'),
-            checkVectors: document.getElementById('check-vectors'),
+            selectVectors: document.getElementById('select-vectors'),
             checkConnect: document.getElementById('check-connect'),
+            checkTrails: document.getElementById('check-trails'),
+            selectTrailFrame: document.getElementById('select-trail-frame'),
             viewToggle: document.getElementById('view-toggle')
         };
 
@@ -273,9 +302,11 @@
             state.simSpeed = parseFloat(e.target.value);
         });
 
-        // チェックボックス
-        ui.checkVectors.addEventListener('change', (e) => state.showVectors = e.target.checked);
+         // 表示オプション
+        ui.selectVectors.addEventListener('change', (e) => state.vectorMode = e.target.value);
         ui.checkConnect.addEventListener('change', (e) => state.connectLines = e.target.checked);
+        ui.checkTrails.addEventListener('change', (e) => state.showTrails = e.target.checked);
+        ui.selectTrailFrame.addEventListener('change', (e) => state.trailFrame = e.target.value);
 
         // 視点切り替え
         const viewOptions = document.querySelectorAll('.view-option');
@@ -345,6 +376,8 @@
                     obj.vy = 0; // 接地後は止まる
                     obj.vx = 0; // 今回の仕様では水平方向も止まるとする
                 }
+            
+                recordTrail(obj);
             });
 
             // 4. 終了判定 (画面端まで飛行機が行ったら)
@@ -365,6 +398,11 @@
                 vx: state.planeV, // 投下瞬間の飛行機の速度を持つ（慣性）
                 vy: 0,
                 landed: false,
+                trail: [{
+                    x: state.planeX,
+                    y: PLANE_Y,
+                    relX: 0
+                }],
                 color: '#FF5722'
             });
         }
@@ -397,6 +435,11 @@
                 drawConnectionLines(cameraX);
             }
 
+            // 軌跡の描画（オプション）
+            if (state.showTrails) {
+                drawTrails(cameraX);
+            }
+            
             // 物体の描画
             state.objects.forEach(obj => {
                 drawObject(obj, cameraX);
@@ -480,6 +523,43 @@
             ctx.setLineDash([]);
         }
 
+        function drawTrails(cameraX) {
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'rgba(255, 87, 34, 0.5)';
+
+            state.objects.forEach(obj => {
+                if (!obj.trail || obj.trail.length < 2) return;
+
+                ctx.beginPath();
+                obj.trail.forEach((point, index) => {
+                    const worldX = state.trailFrame === 'plane'
+                        ? state.planeX + point.relX
+                        : point.x;
+                    const drawX = worldX - cameraX;
+                    const drawY = point.y;
+
+                    if (index === 0) {
+                        ctx.moveTo(drawX, drawY);
+                    } else {
+                        ctx.lineTo(drawX, drawY);
+                    }
+                });
+                ctx.stroke();
+
+                // 点で足跡を強調
+                ctx.fillStyle = 'rgba(255, 87, 34, 0.6)';
+                obj.trail.forEach(point => {
+                    const worldX = state.trailFrame === 'plane'
+                        ? state.planeX + point.relX
+                        : point.x;
+                    const drawX = worldX - cameraX;
+                    ctx.beginPath();
+                    ctx.arc(drawX, point.y, 2.5, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+            });
+        }
+
         function drawObject(obj, cameraX) {
             const drawX = obj.x - cameraX;
             const drawY = obj.y;
@@ -491,9 +571,13 @@
             ctx.fill();
 
             // ベクトル描画
-            if (state.showVectors && !obj.landed) {
-                drawVector(drawX, drawY, obj.vx, 0, '#2979ff'); // 水平成分 (青)
-                drawVector(drawX, drawY, 0, obj.vy, '#f44336'); // 鉛直成分 (赤)
+            if (state.vectorMode !== 'none' && !obj.landed) {
+                if (state.vectorMode === 'both' || state.vectorMode === 'vx') {
+                    drawVector(drawX, drawY, obj.vx, 0, '#2979ff'); // 水平成分 (青)
+                }
+                if (state.vectorMode === 'both' || state.vectorMode === 'vy') {
+                    drawVector(drawX, drawY, 0, obj.vy, '#f44336'); // 鉛直成分 (赤)
+                }
             }
         }
 
@@ -552,6 +636,15 @@
             ctx.textAlign = 'left';
             ctx.fillText(`時間: ${state.time.toFixed(2)} s`, 10, 20);
             ctx.fillText(`飛行機速度: ${state.planeV.toFixed(1)} m/s`, 10, 40);
+        }
+
+        function recordTrail(obj) {
+            if (!obj.trail) return;
+            obj.trail.push({
+                x: obj.x,
+                y: obj.y,
+                relX: obj.x - state.planeX
+            });
         }
 
         // 開始
